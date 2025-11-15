@@ -3,7 +3,7 @@ import requests
 import re
 import json
 
-st.set_page_config(page_title="夸克直链解析 (全域名轰炸版)", layout="centered")
+st.set_page_config(page_title="夸克直链解析 (最终修复版)", layout="centered")
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
@@ -18,7 +18,6 @@ def get_files_from_api(share_url, cookie, pwd_code=""):
         return False, f"链接解析错误: {str(e)}"
 
     # 2. 定义可能的接口列表 (包含 pan 和 drive 两个域名)
-    # 很多时候 API 其实在 drive.quark.cn 上
     possible_endpoints = [
         "https://drive.quark.cn/1/clouddrive/share/share_page/list?pr=ucpro&fr=pc",
         "https://drive.quark.cn/1/clouddrive/share/share_page/sort?pr=ucpro&fr=pc",
@@ -94,7 +93,7 @@ def get_download_link(share_id, fid, cookie):
         pass
     return None
 
-st.title("夸克直链解析 (全域名轰炸版)")
+st.title("夸克直链解析 (最终修复版)")
 pwd = st.text_input("访问密码", type="password")
 
 if pwd == "888888":
@@ -107,21 +106,4 @@ if pwd == "888888":
             st.error("请填写完整信息")
         else:
             pwd_code = ""
-            match = re.search(r"pwd=([a-zA-Z0-9]+)", link_input)
-            if match: pwd_code = match.group(1)
-
-            with st.spinner("正在尝试 pan.quark.cn 和 drive.quark.cn 所有接口..."):
-                success, result = get_files_from_api(link_input, cookie_input, pwd_code)
-                
-                if success:
-                    st.success("🎉 成功获取文件！")
-                    match_id = re.search(r"s/([a-zA-Z0-9]+)", link_input)
-                    share_id = match_id.group(1) if match_id else ""
-                    
-                    if not result:
-                        st.warning("文件夹是空的，或者没有解析到文件。")
-                    
-                    for f in result:
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.write(f"📄 {f
+            match = re.search(r"pwd=([a-zA-Z0
