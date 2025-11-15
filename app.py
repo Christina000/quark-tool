@@ -3,13 +3,12 @@ import requests
 import re
 import json
 
-st.set_page_config(page_title="夸克直链解析", layout="centered")
+st.set_page_config(page_title="夸克直链解析 (API V2修复版)", layout="centered")
 
-# 模拟浏览器头部
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
 def get_files_from_api(share_url, cookie, pwd_code=""):
-    # 1. 提取分享ID (s/后面那串)
+    # 1. 提取分享ID
     try:
         match = re.search(r"s/([a-zA-Z0-9]+)", share_url)
         if not match:
@@ -18,13 +17,15 @@ def get_files_from_api(share_url, cookie, pwd_code=""):
     except Exception as e:
         return False, str(e)
 
-    # 2. 定义可能的接口列表
-    # 包含 pan 和 drive 两个域名，sort 和 list 两个接口
+    # 2. 定义可能的接口列表 (这是关键修改点！)
+    # 移除了 share_page/sort 这种老接口，换成了 share_file_list
     endpoints = [
-        "https://drive.quark.cn/1/clouddrive/share/share_page/list?pr=ucpro&fr=pc",
-        "https://drive.quark.cn/1/clouddrive/share/share_page/sort?pr=ucpro&fr=pc",
-        "https://pan.quark.cn/1/clouddrive/share/share_page/list?pr=ucpro&fr=pc",
-        "https://pan.quark.cn/1/clouddrive/share/share_page/sort?pr=ucpro&fr=pc"
+        # 接口 A: 通用分享列表
+        "https://pan.quark.cn/1/clouddrive/share/share_file_list?pr=ucpro&fr=pc",
+        # 接口 B: 备用驱动域名
+        "https://drive.quark.cn/1/clouddrive/share/share_file_list?pr=ucpro&fr=pc",
+        # 接口 C: V2版本接口 (通常更稳)
+        "https://pan.quark.cn/1/clouddrive/share/share_data?pr=ucpro&fr=pc"
     ]
     
     headers = {
@@ -35,13 +36,15 @@ def get_files_from_api(share_url, cookie, pwd_code=""):
         "Accept": "application/json, text/plain, */*"
     }
 
-    # 3. 准备参数
+    # 3. 准备参数 (注意：新接口参数略有不同)
+    # stoken 需要置空，让 Cookie 自动处理
     payload = {
         "pwd_id": pwd_id,
         "dir_fid": "0",
         "pdir_fid": "0",
         "force": 0,
-        "sort_type": 6,
+        "stoken": "",
+        "pdir_key": "",
         "_page": 1,
         "_size": 50
     }
@@ -56,30 +59,32 @@ def get_files_from_api(share_url, cookie, pwd_code=""):
             if r.status_code == 200:
                 data = r.json()
                 code = data.get("code")
+                
+                # 成功情况
                 if code == 0:
-                    # 成功！兼容不同结构
+                    # 提取数据的兼容逻辑
+                    # 有时候在 data.list，有时候在 data.share_file_list
                     data_body = data.get("data", {})
-                    # 有些接口直接返回 list，有些在 data 下
-                    if isinstance(data_body, list):
-                        return True, data_body
+                    
+                    if "list" in data_body:
+                        return True, data_body["list"]
+                    elif "share_file_list" in data_body:
+                        return True, data_body["share_file_list"]
+                    elif isinstance(data_body, list):
+                         return True, data_body
                     else:
-                        flist = data_body.get("list")
-                        if flist is not None:
-                            return True, flist
-                        # 如果data是字典但没有list，可能直接就是list
-                        if "list" in data:
-                            return True, data["list"]
-                        # 空文件夹情况
+                        # 空文件夹
                         return True, []
+                        
                 elif code == 40005:
-                    return False, "需要提取码，但验证失败。"
+                    return False, "需要提取码验证，或密码错误。"
                 else:
-                    msg = data.get("message", "未知错误")
+                    msg = data.get("message", "未知业务错误")
                     error_log.append(f"{api_url} -> {msg}")
             else:
                 error_log.append(f"{api_url} -> HTTP {r.status_code}")
         except Exception as e:
-            error_log.append(f"{api_url} -> {str(e)}")
+            error_log.append(f"{api_url} -> 异常: {str(e)}")
             continue
     
     return False, "\n".join(error_log)
@@ -101,11 +106,11 @@ def get_download_link(share_id, fid, cookie):
     return None
 
 # --- 界面逻辑 ---
-st.title("夸克直链解析")
+st.title("夸克直链解析 (V2接口版)")
 pwd = st.text_input("访问密码", type="password")
 
 if pwd == "888888":
-    st.caption("提示：请确保Cookie完整且有效（推荐使用无痕模式获取）")
+    st.caption("提示：若一直失败，请尝试在浏览器隐私模式下重新获取 Cookie")
     cookie_input = st.text_area("夸克 Cookie", height=100)
     link_input = st.text_input("分享链接")
     
@@ -113,38 +118,39 @@ if pwd == "888888":
         if not cookie_input or not link_input:
             st.error("请填写完整信息")
         else:
-            # 提取链接里的pwd参数
+            # 简单的pwd提取
             pwd_code = ""
-            # 这里是你之前报错的地方，已简化写法
             if "pwd=" in link_input:
                 try:
-                    split_url = link_input.split("pwd=")
-                    if len(split_url) > 1:
-                        pwd_code = split_url[1].split("&")[0]
-                except:
-                    pass
+                    pwd_code = link_input.split("pwd=")[1].split("&")[0]
+                except: pass
 
-            with st.spinner("正在尝试连接夸克服务器..."):
+            with st.spinner("正在尝试 V2 接口..."):
                 success, result = get_files_from_api(link_input, cookie_input, pwd_code)
                 
                 if success:
                     st.success("🎉 成功获取文件！")
                     # 提取share_id
-                    sid_match = re.search(r"s/([a-zA-Z0-9]+)", link_input)
-                    share_id = sid_match.group(1) if sid_match else ""
+                    try:
+                        share_id = re.search(r"s/([a-zA-Z0-9]+)", link_input).group(1)
+                    except:
+                        share_id = ""
                     
                     if not result:
-                        st.warning("文件夹为空或未解析到内容。")
+                        st.warning("文件夹为空。")
                     
                     for f in result:
                         col1, col2 = st.columns([3, 1])
-                        fname = f.get('file_name', '未知文件')
+                        # 兼容不同字段名
+                        fname = f.get('file_name') or f.get('name') or '未知文件'
+                        fid = f.get('fid')
+                        is_dir = f.get('obj_category') == 'dir' or f.get('type') == 1
+                        
                         with col1:
                             st.write(f"📄 {fname}")
                         with col2:
-                            # 只有文件才显示下载
-                            if f.get('obj_category') != 'dir':
-                                dl = get_download_link(share_id, f['fid'], cookie_input)
+                            if not is_dir:
+                                dl = get_download_link(share_id, fid, cookie_input)
                                 if dl:
                                     st.link_button("下载", dl)
                                 else:
@@ -152,7 +158,7 @@ if pwd == "888888":
                             else:
                                 st.caption("文件夹")
                 else:
-                    st.error("解析失败，调试日志：")
+                    st.error("所有接口均尝试失败，日志：")
                     st.code(result)
 else:
     st.info("请输入访问密码")
