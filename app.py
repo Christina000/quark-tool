@@ -3,7 +3,7 @@ import requests
 import re
 import json
 
-st.set_page_config(page_title="夸克直链解析 (自动寻址版)", layout="centered")
+st.set_page_config(page_title="夸克直链解析 (全域名轰炸版)", layout="centered")
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
@@ -17,17 +17,19 @@ def get_files_from_api(share_url, cookie, pwd_code=""):
     except Exception as e:
         return False, f"链接解析错误: {str(e)}"
 
-    # 2. 定义可能的接口列表 (夸克经常改接口，我们让程序自动试)
+    # 2. 定义可能的接口列表 (包含 pan 和 drive 两个域名)
+    # 很多时候 API 其实在 drive.quark.cn 上
     possible_endpoints = [
+        "https://drive.quark.cn/1/clouddrive/share/share_page/list?pr=ucpro&fr=pc",
+        "https://drive.quark.cn/1/clouddrive/share/share_page/sort?pr=ucpro&fr=pc",
         "https://pan.quark.cn/1/clouddrive/share/share_page/list?pr=ucpro&fr=pc",
-        "https://pan.quark.cn/1/clouddrive/share/share_file_list?pr=ucpro&fr=pc",
         "https://pan.quark.cn/1/clouddrive/share/share_page/sort?pr=ucpro&fr=pc"
     ]
     
     headers = {
         "User-Agent": USER_AGENT,
         "Cookie": cookie.strip(),
-        "Referer": "https://pan.quark.cn/",
+        "Referer": "https://pan.quark.cn/", 
         "Origin": "https://pan.quark.cn",
         "Accept": "application/json, text/plain, */*"
     }
@@ -46,32 +48,37 @@ def get_files_from_api(share_url, cookie, pwd_code=""):
         payload["passcode"] = pwd_code
 
     # 4. 轮询尝试
-    last_error = ""
+    error_log = []
     for api_url in possible_endpoints:
         try:
-            # st.write(f"正在尝试接口: {api_url}") # 调试用
+            # st.write(f"尝试: {api_url}") # 调试显示
             r = requests.post(api_url, headers=headers, json=payload, timeout=10)
             
             if r.status_code == 200:
                 data = r.json()
-                # 只要 code=0 且有 list 数据，就说明成功了
-                if data.get("code") == 0 and ("list" in data.get("data", {}) or "list" in data):
-                    # 兼容不同接口的数据结构差异
+                # 只要 code=0 且数据里有 list，就是成功
+                if data.get("code") == 0:
                     file_list = data.get("data", {}).get("list") or data.get("list")
-                    return True, file_list
+                    if file_list:
+                        return True, file_list
+                    else:
+                         # 有时候是空文件夹
+                         return True, []
                 elif data.get("code") == 40005:
-                    return False, "需要提取码验证，当前逻辑可能未覆盖Verify接口。"
+                    return False, "需要提取码验证，但接口拒绝了当前密码。"
                 else:
-                    last_error = f"接口 {api_url} 返回业务错误: {json.dumps(data, ensure_ascii=False)}"
+                    error_log.append(f"❌ {api_url} 业务报错: {data.get('message')}")
             else:
-                last_error = f"接口 {api_url} HTTP错误: {r.status_code}"
+                error_log.append(f"❌ {api_url} HTTP状态: {r.status_code}")
         except Exception as e:
-            last_error = str(e)
+            error_log.append(f"❌ {api_url} 异常: {str(e)}")
             continue
     
-    return False, f"所有接口均尝试失败。最后一次错误: {last_error}"
+    # 如果循环结束都没返回 True，打印所有尝试的错误
+    return False, "\n".join(error_log)
 
 def get_download_link(share_id, fid, cookie):
+    # 下载接口通常也都在 drive 域名下
     url = "https://drive.quark.cn/1/clouddrive/sharefile/download"
     headers = {
         "User-Agent": USER_AGENT,
@@ -87,10 +94,11 @@ def get_download_link(share_id, fid, cookie):
         pass
     return None
 
-st.title("夸克直链解析 (自动寻址版)")
+st.title("夸克直链解析 (全域名轰炸版)")
 pwd = st.text_input("访问密码", type="password")
 
 if pwd == "888888":
+    st.caption("如果解析失败，请尝试重新获取最新的 Cookie")
     cookie_input = st.text_area("夸克 Cookie", height=100)
     link_input = st.text_input("分享链接")
     
@@ -102,7 +110,7 @@ if pwd == "888888":
             match = re.search(r"pwd=([a-zA-Z0-9]+)", link_input)
             if match: pwd_code = match.group(1)
 
-            with st.spinner("正在自动匹配 API 接口..."):
+            with st.spinner("正在尝试 pan.quark.cn 和 drive.quark.cn 所有接口..."):
                 success, result = get_files_from_api(link_input, cookie_input, pwd_code)
                 
                 if success:
@@ -110,18 +118,10 @@ if pwd == "888888":
                     match_id = re.search(r"s/([a-zA-Z0-9]+)", link_input)
                     share_id = match_id.group(1) if match_id else ""
                     
+                    if not result:
+                        st.warning("文件夹是空的，或者没有解析到文件。")
+                    
                     for f in result:
                         col1, col2 = st.columns([3, 1])
                         with col1:
-                            st.write(f"📄 {f.get('file_name', '未知')}")
-                        with col2:
-                            if f.get('obj_category') != 'dir':
-                                dl = get_download_link(share_id, f['fid'], cookie_input)
-                                if dl: st.link_button("下载", dl)
-                                else: st.caption("获取失败")
-                            else:
-                                st.caption("文件夹")
-                else:
-                    st.error(result)
-else:
-    st.info("请输入密码 888888")
+                            st.write(f"📄 {f
